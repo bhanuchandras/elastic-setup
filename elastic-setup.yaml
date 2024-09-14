@@ -1,0 +1,145 @@
+---
+- name: Install ELK Stack on Debian VM
+  hosts: all
+  become: yes
+
+  tasks:
+    - name: Update and upgrade APT packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: Add Debian Backports Repository (if needed)
+      apt_repository:
+        repo: "deb http://deb.debian.org/debian bullseye-backports main"
+        state: present
+      when: ansible_distribution_release == "bullseye"
+
+    - name: Install Git
+      apt:
+        name: git
+        state: present
+
+    - name: Install OpenJDK 17
+      apt:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - openjdk-17-jdk
+        - openjdk-17-jre
+      ignore_errors: yes
+
+
+    # Elasticsearch installation
+    - name: Add Elasticsearch GPG key
+      apt_key:
+        url: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+        state: present
+
+    - name: Add Elasticsearch repository
+      apt_repository:
+        repo: "deb https://artifacts.elastic.co/packages/7.x/apt stable main"
+        state: present
+
+    - name: Install Elasticsearch
+      apt:
+        name: elasticsearch
+        state: present
+
+    - name: Configure Elasticsearch
+      lineinfile:
+        path: /etc/elasticsearch/elasticsearch.yml
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+      with_items:
+        - { regexp: '^#network.host', line: 'network.host: 0.0.0.0' }
+        - { regexp: '^#discovery.type', line: 'discovery.type: single-node' }
+
+    - name: Start and enable Elasticsearch
+      systemd:
+        name: elasticsearch
+        enabled: yes
+        state: started
+
+    # Kibana installation
+    - name: Install Kibana
+      apt:
+        name: kibana
+        state: present
+
+    - name: Configure Kibana
+      lineinfile:
+        path: /etc/kibana/kibana.yml
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+      with_items:
+        - { regexp: '^#server.host', line: 'server.host: 0.0.0.0' }
+        - { regexp: '^#elasticsearch.hosts', line: 'elasticsearch.hosts: ["http://localhost:9200"]' }
+
+    - name: Start and enable Kibana
+      systemd:
+        name: kibana
+        enabled: yes
+        state: started
+
+    # Logstash installation
+    - name: Install Logstash
+      apt:
+        name: logstash
+        state: present
+
+    - name: Create Logstash config directory
+      file:
+        path: /etc/logstash/conf.d
+        state: directory
+        mode: '0755'
+
+    - name: Create Logstash configuration file
+      copy:
+        dest: /etc/logstash/conf.d/logstash-simple.conf
+        content: |
+          input {
+            stdin { }
+          }
+          output {
+            elasticsearch {
+              hosts => ["http://localhost:9200"]
+            }
+            stdout { codec => rubydebug }
+          }
+
+    - name: Start and enable Logstash
+      systemd:
+        name: logstash
+        enabled: yes
+        state: started
+
+    # Firewall rule for Elasticsearch (port 9200) and Kibana (port 5601)
+    - name: Ensure UFW is installed
+      apt:
+        name: ufw
+        state: present
+
+    - name: Allow OpenSSH in UFW
+      ufw:
+        rule: allow
+        name: OpenSSH
+
+    - name: Allow Elasticsearch on port 9200
+      ufw:
+        rule: allow
+        port: 9200
+        proto: tcp
+
+    - name: Allow Kibana on port 5601
+      ufw:
+        rule: allow
+        port: 5601
+        proto: tcp
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+
