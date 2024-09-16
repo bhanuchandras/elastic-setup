@@ -1,0 +1,76 @@
+---
+- name: Setup OpenTelemetry Collector on RHEL 8 for Host Metrics to Grafana Cloud
+  hosts: app-node
+  become: yes
+
+  vars:
+    otel_version: "0.83.0"  # Change this to the desired version of otelcol-contrib
+    grafana_cloud_instance_id: "YOUR_GRAFANA_CLOUD_INSTANCE_ID"  # Replace with your Grafana Cloud instance ID
+    grafana_cloud_api_key: "YOUR_GRAFANA_CLOUD_API_KEY"  # Replace with your Grafana Cloud API key
+    grafana_cloud_otlp_endpoint: "https://otlp-gateway.grafana.net/otlp"
+    service_name: "otelcol-contrib"
+
+  tasks:
+    - name: Ensure required packages are installed
+      yum:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - curl
+        - wget
+
+    - name: Download OpenTelemetry Collector package
+      get_url:
+        url: "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v{{ otel_version }}/otelcol-contrib-{{ otel_version }}_linux_amd64.rpm"
+        dest: "/tmp/otelcol-contrib.rpm"
+
+    - name: Install OpenTelemetry Collector
+      yum:
+        name: /tmp/otelcol-contrib.rpm
+        state: present
+
+    - name: Create OpenTelemetry Collector configuration directory
+      file:
+        path: /etc/otelcol
+        state: directory
+
+    - name: Deploy OpenTelemetry Collector configuration
+      copy:
+        dest: /etc/otelcol/config.yaml
+        content: |
+          receivers:
+            hostmetrics:
+              collection_interval: 60s
+              scrapers:
+                cpu:
+                memory:
+                disk:
+                filesystem:
+                load:
+                network:
+                paging:
+                processes:
+
+          exporters:
+            otlphttp:
+              endpoint: "{{ grafana_cloud_otlp_endpoint }}"
+              headers:
+                "Authorization": "Basic {{ (grafana_cloud_instance_id + ':' + grafana_cloud_api_key) | b64encode }}"
+
+          service:
+            pipelines:
+              metrics:
+                receivers: [hostmetrics]
+                exporters: [otlphttp]
+
+    - name: Enable and start the OpenTelemetry Collector service
+      systemd:
+        name: otelcol-contrib
+        enabled: yes
+        state: started
+
+    - name: Verify OpenTelemetry Collector service status
+      systemd:
+        name: otelcol-contrib
+        state: started
+        enabled: true
